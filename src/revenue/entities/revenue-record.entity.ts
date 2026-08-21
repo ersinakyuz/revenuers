@@ -3,7 +3,10 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  ManyToOne,
 } from 'typeorm';
+
+import { App } from '../../apps/entities/app.entity';
 
 export enum RevenueSource {
   APPLE = 'APPLE',
@@ -27,6 +30,12 @@ export enum RevenueType {
 export class RevenueRecord {
   @PrimaryGeneratedColumn()
   id: number;
+
+  @ManyToOne(() => App, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  app: App;
 
   @Column({
     type: 'enum',
@@ -64,8 +73,11 @@ export class RevenueRecord {
   @Column({ length: 3 })
   currency: string;
 
-  @Column({ nullable: true })
-  externalId: string;
+    @Column({
+        nullable: true,
+        unique: true,
+        })
+    externalId: string;
 
   @CreateDateColumn()
   createdAt: Date;
