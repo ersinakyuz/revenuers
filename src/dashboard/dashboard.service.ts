@@ -40,18 +40,14 @@ export class DashboardService {
     if (from) {
       qb.andWhere(
         `${alias}.date >= :from`,
-        {
-          from,
-        },
+        { from },
       );
     }
 
     if (to) {
       qb.andWhere(
         `${alias}.date <= :to`,
-        {
-          to,
-        },
+        { to },
       );
     }
 
@@ -66,9 +62,7 @@ export class DashboardService {
     if (source) {
       qb.andWhere(
         `${alias}.source = :source`,
-        {
-          source,
-        },
+        { source },
       );
     }
 
@@ -117,31 +111,70 @@ export class DashboardService {
       await revenueTotalsQuery.getRawMany();
 
     //
-    // Total units
+    // Downloads
     //
-    const metricTotalsQuery =
+    const downloadsQuery =
       this.metricRepository
         .createQueryBuilder('metric')
         .select(
           'COALESCE(SUM(metric.units), 0)',
-          'totalUnits',
+          'downloads',
+        )
+        .where(
+          'metric.metricType = :downloadType',
+          {
+            downloadType: 'DOWNLOAD',
+          },
         );
 
     this.applyDateFilter(
-      metricTotalsQuery,
+      downloadsQuery,
       'metric',
       from,
       to,
     );
 
     this.applySourceFilter(
-      metricTotalsQuery,
+      downloadsQuery,
       'metric',
       source,
     );
 
-    const metricTotals =
-      await metricTotalsQuery.getRawOne();
+    const downloadsResult =
+      await downloadsQuery.getRawOne();
+
+    //
+    // Paid sales
+    //
+    const paidSalesQuery =
+      this.metricRepository
+        .createQueryBuilder('metric')
+        .select(
+          'COALESCE(SUM(metric.units), 0)',
+          'paidSales',
+        )
+        .where(
+          'metric.metricType = :paidType',
+          {
+            paidType: 'PAID_SALE',
+          },
+        );
+
+    this.applyDateFilter(
+      paidSalesQuery,
+      'metric',
+      from,
+      to,
+    );
+
+    this.applySourceFilter(
+      paidSalesQuery,
+      'metric',
+      source,
+    );
+
+    const paidSalesResult =
+      await paidSalesQuery.getRawOne();
 
     //
     // Revenue by source
@@ -276,7 +309,7 @@ export class DashboardService {
       await revenueByAppQuery.getRawMany();
 
     //
-    // Units by app
+    // Downloads + paid sales by app
     //
     const unitsByAppQuery =
       this.metricRepository
@@ -294,8 +327,28 @@ export class DashboardService {
           'appName',
         )
         .addSelect(
-          'SUM(metric.units)',
-          'units',
+          `
+          SUM(
+            CASE
+              WHEN metric.metricType = 'DOWNLOAD'
+              THEN metric.units
+              ELSE 0
+            END
+          )
+          `,
+          'downloads',
+        )
+        .addSelect(
+          `
+          SUM(
+            CASE
+              WHEN metric.metricType = 'PAID_SALE'
+              THEN metric.units
+              ELSE 0
+            END
+          )
+          `,
+          'paidSales',
         )
         .groupBy('app.id')
         .addGroupBy('app.name');
@@ -323,8 +376,12 @@ export class DashboardService {
 
       revenueTotals,
 
-      totalUnits: Number(
-        metricTotals?.totalUnits ?? 0,
+      downloads: Number(
+        downloadsResult?.downloads ?? 0,
+      ),
+
+      paidSales: Number(
+        paidSalesResult?.paidSales ?? 0,
       ),
 
       revenueBySource,
@@ -340,9 +397,9 @@ export class DashboardService {
     source?: RevenueSource,
   ) {
     //
-    // Units grouped by day
+    // Downloads + paid sales grouped by day
     //
-    const unitsQuery =
+    const metricsQuery =
       this.metricRepository
         .createQueryBuilder('metric')
         .select(
@@ -350,29 +407,53 @@ export class DashboardService {
           'date',
         )
         .addSelect(
-          'SUM(metric.units)',
-          'units',
+          `
+          SUM(
+            CASE
+              WHEN metric.metricType = 'DOWNLOAD'
+              THEN metric.units
+              ELSE 0
+            END
+          )
+          `,
+          'downloads',
+        )
+        .addSelect(
+          `
+          SUM(
+            CASE
+              WHEN metric.metricType = 'PAID_SALE'
+              THEN metric.units
+              ELSE 0
+            END
+          )
+          `,
+          'paidSales',
         )
         .groupBy('metric.date')
-        .orderBy('metric.date', 'ASC');
+        .orderBy(
+          'metric.date',
+          'ASC',
+        );
 
     this.applyDateFilter(
-      unitsQuery,
+      metricsQuery,
       'metric',
       from,
       to,
     );
 
     this.applySourceFilter(
-      unitsQuery,
+      metricsQuery,
       'metric',
       source,
     );
 
-    const unitRows =
-      await unitsQuery.getRawMany<{
+    const metricRows =
+      await metricsQuery.getRawMany<{
         date: string;
-        units: string;
+        downloads: string;
+        paidSales: string;
       }>();
 
     //
@@ -399,7 +480,10 @@ export class DashboardService {
         )
         .groupBy('revenue.date')
         .addGroupBy('revenue.currency')
-        .orderBy('revenue.date', 'ASC');
+        .orderBy(
+          'revenue.date',
+          'ASC',
+        );
 
     this.applyDateFilter(
       revenueQuery,
@@ -426,7 +510,8 @@ export class DashboardService {
       string,
       {
         date: string;
-        units: number;
+        downloads: number;
+        paidSales: number;
         revenue: Array<{
           currency: string;
           grossAmount: string;
@@ -435,40 +520,57 @@ export class DashboardService {
       }
     >();
 
-    for (const row of unitRows) {
-      const date = String(row.date);
+    for (const row of metricRows) {
+      const date =
+        String(row.date);
 
       dateMap.set(date, {
         date,
-        units: Number(row.units),
+        downloads:
+          Number(row.downloads),
+        paidSales:
+          Number(row.paidSales),
         revenue: [],
       });
     }
 
     for (const row of revenueRows) {
-      const date = String(row.date);
+      const date =
+        String(row.date);
 
       if (!dateMap.has(date)) {
         dateMap.set(date, {
           date,
-          units: 0,
+          downloads: 0,
+          paidSales: 0,
           revenue: [],
         });
       }
 
-      dateMap.get(date)!.revenue.push({
-        currency: row.currency,
-        grossAmount: row.grossAmount,
-        netAmount: row.netAmount,
-      });
+      dateMap
+        .get(date)!
+        .revenue
+        .push({
+          currency:
+            row.currency,
+
+          grossAmount:
+            row.grossAmount,
+
+          netAmount:
+            row.netAmount,
+        });
     }
 
-    const days = Array.from(
-      dateMap.values(),
-    ).sort(
-      (a, b) =>
-        a.date.localeCompare(b.date),
-    );
+    const days =
+      Array.from(
+        dateMap.values(),
+      ).sort(
+        (a, b) =>
+          a.date.localeCompare(
+            b.date,
+          ),
+      );
 
     return {
       from: from ?? null,
@@ -491,9 +593,9 @@ export class DashboardService {
       });
 
     //
-    // Units per app
+    // Downloads + paid sales per app
     //
-    const unitsQuery =
+    const metricsQuery =
       this.metricRepository
         .createQueryBuilder('metric')
         .innerJoin(
@@ -505,32 +607,53 @@ export class DashboardService {
           'appId',
         )
         .addSelect(
-          'SUM(metric.units)',
-          'units',
+          `
+          SUM(
+            CASE
+              WHEN metric.metricType = 'DOWNLOAD'
+              THEN metric.units
+              ELSE 0
+            END
+          )
+          `,
+          'downloads',
+        )
+        .addSelect(
+          `
+          SUM(
+            CASE
+              WHEN metric.metricType = 'PAID_SALE'
+              THEN metric.units
+              ELSE 0
+            END
+          )
+          `,
+          'paidSales',
         )
         .groupBy('app.id');
 
     this.applyDateFilter(
-      unitsQuery,
+      metricsQuery,
       'metric',
       from,
       to,
     );
 
     this.applySourceFilter(
-      unitsQuery,
+      metricsQuery,
       'metric',
       source,
     );
 
-    const unitRows =
-      await unitsQuery.getRawMany<{
+    const metricRows =
+      await metricsQuery.getRawMany<{
         appId: number;
-        units: string;
+        downloads: string;
+        paidSales: string;
       }>();
 
     //
-    // Revenue per app + source + currency
+    // Revenue per app
     //
     const revenueQuery =
       this.revenueRepository
@@ -585,15 +708,24 @@ export class DashboardService {
         netAmount: string;
       }>();
 
-    const unitsMap = new Map<
+    const metricsMap = new Map<
       number,
-      number
+      {
+        downloads: number;
+        paidSales: number;
+      }
     >();
 
-    for (const row of unitRows) {
-      unitsMap.set(
+    for (const row of metricRows) {
+      metricsMap.set(
         Number(row.appId),
-        Number(row.units),
+        {
+          downloads:
+            Number(row.downloads),
+
+          paidSales:
+            Number(row.paidSales),
+        },
       );
     }
 
@@ -635,17 +767,26 @@ export class DashboardService {
       to: to ?? null,
       source: source ?? null,
 
-      apps: apps.map((app) => ({
-        id: app.id,
-        name: app.name,
-        bundleId: app.bundleId,
+      apps: apps.map((app) => {
+        const metrics =
+          metricsMap.get(app.id);
 
-        units:
-          unitsMap.get(app.id) ?? 0,
+        return {
+          id: app.id,
+          name: app.name,
+          bundleId: app.bundleId,
 
-        revenue:
-          revenueMap.get(app.id) ?? [],
-      })),
+          downloads:
+            metrics?.downloads ?? 0,
+
+          paidSales:
+            metrics?.paidSales ?? 0,
+
+          revenue:
+            revenueMap.get(app.id) ??
+            [],
+        };
+      }),
     };
   }
 
@@ -655,9 +796,6 @@ export class DashboardService {
     to?: string,
     source?: RevenueSource,
   ) {
-    //
-    // Verify app exists
-    //
     const app =
       await this.appRepository.findOne({
         where: {
@@ -672,9 +810,9 @@ export class DashboardService {
     }
 
     //
-    // App units grouped by day
+    // Downloads + paid sales
     //
-    const unitsQuery =
+    const metricsQuery =
       this.metricRepository
         .createQueryBuilder('metric')
         .select(
@@ -682,8 +820,28 @@ export class DashboardService {
           'date',
         )
         .addSelect(
-          'SUM(metric.units)',
-          'units',
+          `
+          SUM(
+            CASE
+              WHEN metric.metricType = 'DOWNLOAD'
+              THEN metric.units
+              ELSE 0
+            END
+          )
+          `,
+          'downloads',
+        )
+        .addSelect(
+          `
+          SUM(
+            CASE
+              WHEN metric.metricType = 'PAID_SALE'
+              THEN metric.units
+              ELSE 0
+            END
+          )
+          `,
+          'paidSales',
         )
         .where(
           'metric.appId = :appId',
@@ -698,26 +856,27 @@ export class DashboardService {
         );
 
     this.applyDateFilter(
-      unitsQuery,
+      metricsQuery,
       'metric',
       from,
       to,
     );
 
     this.applySourceFilter(
-      unitsQuery,
+      metricsQuery,
       'metric',
       source,
     );
 
-    const unitRows =
-      await unitsQuery.getRawMany<{
+    const metricRows =
+      await metricsQuery.getRawMany<{
         date: string;
-        units: string;
+        downloads: string;
+        paidSales: string;
       }>();
 
     //
-    // App revenue grouped by day + currency
+    // Revenue
     //
     const revenueQuery =
       this.revenueRepository
@@ -774,14 +933,12 @@ export class DashboardService {
         netAmount: string;
       }>();
 
-    //
-    // Merge units + revenue
-    //
     const dateMap = new Map<
       string,
       {
         date: string;
-        units: number;
+        downloads: number;
+        paidSales: number;
         revenue: Array<{
           currency: string;
           grossAmount: string;
@@ -790,14 +947,19 @@ export class DashboardService {
       }
     >();
 
-    for (const row of unitRows) {
+    for (const row of metricRows) {
       const date =
         String(row.date);
 
       dateMap.set(date, {
         date,
-        units:
-          Number(row.units),
+
+        downloads:
+          Number(row.downloads),
+
+        paidSales:
+          Number(row.paidSales),
+
         revenue: [],
       });
     }
@@ -809,7 +971,8 @@ export class DashboardService {
       if (!dateMap.has(date)) {
         dateMap.set(date, {
           date,
-          units: 0,
+          downloads: 0,
+          paidSales: 0,
           revenue: [],
         });
       }

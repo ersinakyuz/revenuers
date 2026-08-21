@@ -345,7 +345,9 @@ async getDailySalesReport(reportDate: string) {
         app: normalized.app,
         source: RevenueSource.APPLE,
         date: normalized.date,
-        metricType: 'UNITS',
+        metricType: this.getMetricType(
+          normalized.productTypeIdentifier,
+        ),        
         units: normalized.units,
         country: normalized.country,
         productTypeIdentifier: normalized.productTypeIdentifier,
@@ -543,6 +545,7 @@ async getDailySalesReport(reportDate: string) {
     @Cron(CronExpression.EVERY_DAY_AT_6AM, {
   timeZone: 'Europe/Berlin',
 })
+
 async syncDailyAppleSales() {
   const date = new Date();
 
@@ -570,4 +573,17 @@ async syncDailyAppleSales() {
     );
   }
 }
+
+private getMetricType(
+  productTypeIdentifier: string,
+): string {
+  if (
+    productTypeIdentifier.startsWith('IA')
+  ) {
+    return 'PAID_SALE';
+  }
+
+  return 'DOWNLOAD';
+}
+
 }
